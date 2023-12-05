@@ -88,9 +88,8 @@ class EncoderBuilder:
         if in_channels == 0:
             in_channels_list[0] = 1
 
-        out_channels = list(np.linspace(in_channels_list[1],
-                                      max_out_channels,
-                                      n_layers).astype(int))
+        out_channels = in_channels_list[1:]
+        out_channels.append(max_out_channels)
 
         modules = []
         for n in range(n_layers):

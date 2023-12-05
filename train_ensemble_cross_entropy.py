@@ -15,11 +15,12 @@ print(f'Calculating on device: {device}')
 
 pre_history_size = 104
 forecast_size = 52
+sea_name = 'kara'
 
 
-def init_model(in_channels, out_channels):
+def init_model(in_channels, out_channels, dim):
     encoder = EncoderForecasterBase()
-    encoder.init_encoder(input_size=[110, 130],
+    encoder.init_encoder(input_size=[dim[0], dim[1]],
                          n_layers=5,
                          in_channels=in_channels,
                          out_channels=out_channels)
@@ -32,32 +33,32 @@ def init_full_dataset(dates_range):
     dates = []
     dataset = []
     for date in dates_range:
-        file =f'osi_laptev_{date}.npy'
-        array = np.load(f'matrices/laptev_sea_osisaf/{file}')
+        file =f'osi_{sea_name}_{date}.npy'
+        array = np.load(f'matrices/{sea_name}_sea_osisaf/{file}')
         dates.append(date)
         dataset.append(array)
     return dates, np.array(dataset)
 
 
 def baseline_predict(dates_range):
-    baseline_predictions_folder = 'matrices/laptev_sea_meanyears_prediction'
+    baseline_predictions_folder = f'matrices/{sea_name}_sea_meanyears_prediction'
     prediction = []
     for date in dates_range:
-        matrix = np.load(f'{baseline_predictions_folder}/meanyears_laptev_{date}.npy')
+        matrix = np.load(f'{baseline_predictions_folder}/meanyears_{sea_name}_{date}.npy')
         prediction.append(matrix)
     return np.array(prediction)
 
 
 def create_train_dataset_for_ensemble(dates_range):
-    cnn1 = init_model(pre_history_size, forecast_size)
-    cnn1.load_state_dict(torch.load('single_models/laptev_104_52_l1.pt'))
-    cnn2 = init_model(pre_history_size, forecast_size)
-    cnn2.load_state_dict(torch.load('single_models/laptev_104_52_ssim.pt'))
-
     features_for_ensemble = []
     target_for_ensemble = []
 
     all_dates, all_matrices = init_full_dataset(pd.date_range('20090101', '20161231').strftime('%Y%m%d'))
+
+    cnn1 = init_model(pre_history_size, forecast_size, (all_matrices.shape[1], all_matrices.shape[2]))
+    cnn1.load_state_dict(torch.load(f'single_models/{sea_name}_104_52_l1.pt'))
+    cnn2 = init_model(pre_history_size, forecast_size, (all_matrices.shape[1], all_matrices.shape[2]))
+    cnn2.load_state_dict(torch.load(f'single_models/{sea_name}_104_52_ssim.pt'))
 
     for date in dates_range:
         print(f'Prediction single models for date {date}')
@@ -84,9 +85,20 @@ def create_train_dataset_for_ensemble(dates_range):
     return np.array(features_for_ensemble), np.array(target_for_ensemble)
 
 
+class CELoss(nn.Module):
+    def __init__(self):
+        super(CELoss, self).__init__()
+    def forward(self, output, target):
+        criterion = nn.CrossEntropyLoss()
+        '''output = (output > 0.8).float()
+        target = (target > 0.8).float()'''
+        loss = criterion(output, target)
+        return loss
+
+
 def train_ensemble(features, target, epochs, loss_name='l1'):
     batch_size = 10
-    ensembling_cnn = init_model(features.shape[1], target.shape[1]).to(device)
+    ensembling_cnn = init_model(features.shape[1], target.shape[1], (features.shape[2], features.shape[3])).to(device)
 
     tensor_x, tensor_y = torch.Tensor(features), torch.Tensor(target)
     dataset = TensorDataset(tensor_x, tensor_y)
@@ -95,6 +107,7 @@ def train_ensemble(features, target, epochs, loss_name='l1'):
 
     optimizer = optim.Adam(ensembling_cnn.parameters(), lr=0.001)
     criterion = nn.L1Loss()
+    cross_entropy_loss = CELoss()
 
     losses = []
     start = time.time()
@@ -111,6 +124,9 @@ def train_ensemble(features, target, epochs, loss_name='l1'):
             if loss_name == 'ssim':
                 ssim_loss = 1 - ssim(outputs, test_features, data_range=1, size_average=True)
                 train_loss = ssim_loss
+            if loss_name == 'cel':
+                train_loss = cross_entropy_loss(outputs, test_features)
+
             train_loss.backward()
             optimizer.step()
             loss += train_loss.item()
@@ -121,7 +137,7 @@ def train_ensemble(features, target, epochs, loss_name='l1'):
 
     end = time.time() - start
     print(f'Runtime seconds: {end}')
-    torch.save(ensembling_cnn.state_dict(), f"ensemble_models/laptev_52_{loss_name}.pt")
+    torch.save(ensembling_cnn.state_dict(), f"ensemble_models/{sea_name}_52_{loss_name}.pt")
     plt.plot(np.arange(len(losses)), losses)
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
@@ -131,4 +147,4 @@ def train_ensemble(features, target, epochs, loss_name='l1'):
 
 start_points_dates_range = pd.date_range('20100101', '20151231', freq='15D').strftime('%Y%m%d')
 features, target = create_train_dataset_for_ensemble(start_points_dates_range)
-train_ensemble(features, target, epochs=1000, loss_name='ssim')
+train_ensemble(features, target, epochs=1000, loss_name='cel')

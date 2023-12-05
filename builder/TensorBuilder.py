@@ -47,6 +47,25 @@ def multioutput_tensor(pre_history_len, forecast_len, images_array, additional_i
     return dataset
 
 
+def multioutput_numpy(pre_history_len, forecast_len, images_array):
+    """
+    :param pre_history_len: длина предыстории
+    :param forecast_len: длина предсказания
+    :param images_array: np.array с временным рядом из матриц
+    :return: TensorDataset с набором предикторов и таргетов
+    """
+    x_train = []
+    y_train = []
+    for i in range(images_array.shape[0] - forecast_len - pre_history_len):
+        x = images_array[i:i + pre_history_len, :, :]
+        x_train.append(x)
+        y = images_array[i + pre_history_len:i + pre_history_len + forecast_len, :, :]
+        y_train.append(y)
+    y_train = np.array(y_train)
+    x_train = np.array(x_train)
+    return x_train, y_train
+
+
 def multioutput_binary_output_tensor(pre_history_len, forecast_len, images_array, threshold, x_transform=True):
     """
     :param threshold: порог для присвоения бинарных меток

@@ -9,9 +9,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, TensorDataset
 from builder.EncoderForecasterBase import EncoderForecasterBase
-from builder.TensorBuilder import multioutput_tensor
+from builder.TensorBuilder import multioutput_tensor, multioutput_numpy
+from visualization.tricks import gradate
 
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
@@ -19,34 +20,34 @@ torch.backends.cudnn.deterministic = True
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f'Calculating on device: {device}')
 batch_size = 10
-epochs = 1000
+epochs = 500
 learning_rate = 1e-3
 
 data_freq = 7
+sea_name = 'kara'
 
 DIMS = None
 x_virg = []
-temp_ar = []
-for file in os.listdir('matrices/barents_sea_osisaf'):
-    date = datetime.strptime(file, 'osi_barents_%Y%m%d.npy')
-    if date.year < 2016:
-        array = np.load(f'matrices/barents_sea_osisaf/{file}')
+for file in os.listdir(f'matrices/{sea_name}_sea_osisaf'):
+    date = datetime.strptime(file, f'osi_{sea_name}_%Y%m%d.npy')
+    if date.year < 2010:
+        array = np.load(f'matrices/{sea_name}_sea_osisaf/{file}')
         DIMS = array.shape
-        temp_ar.append(array)
-        if len(temp_ar) == data_freq:
-            temp_ar = np.array(temp_ar)
-            temp_ar = temp_ar[-1]
-            x_virg.append(temp_ar)
-            temp_ar = []
+        x_virg.append(array)
     else:
         break
 
-x_virg = np.array(x_virg)
+x_virg = np.array(x_virg)[::7]
+x_virg = gradate(x_virg)
 
 pre_history_size = 104
 forecast_size = 52
 
-dataset = multioutput_tensor(pre_history_size, forecast_size, x_virg)
+x, y = multioutput_numpy(pre_history_size, forecast_size, x_virg)
+tensor_x = torch.Tensor(x)
+tensor_y = torch.Tensor(y)
+dataset = TensorDataset(tensor_x, tensor_y)
+
 dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 print('Loader created')
 
@@ -59,7 +60,7 @@ encoder.to(device)
 print(encoder)
 
 optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
-criterion = nn.L1Loss()
+criterion = nn.CrossEntropyLoss()
 
 losses = []
 start = time.time()
@@ -70,10 +71,7 @@ for epoch in range(epochs):
         test_features = test_features.to(device)
         optimizer.zero_grad()
         outputs = encoder(train_features)
-        #ssim_loss = 1 - ssim(outputs, test_features, data_range=1, size_average=True)
-        l1_loss = criterion(outputs, test_features)
-        #train_loss = ssim_loss+l1_loss
-        train_loss = l1_loss
+        train_loss = criterion(outputs, test_features)
         train_loss.backward()
         optimizer.step()
         loss += train_loss.item()
@@ -84,7 +82,7 @@ for epoch in range(epochs):
 
 end = time.time() - start
 print(f'Runtime seconds: {end}')
-torch.save(encoder.state_dict(), f"single_models/barents_104_52_l1(1990-2015).pt")
+torch.save(encoder.state_dict(), f"single_models/{sea_name}_104_52_clusters(1990-2010).pt")
 plt.plot(np.arange(len(losses)), losses)
 plt.xlabel('Epoch')
 plt.ylabel('Loss')
